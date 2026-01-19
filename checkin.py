@@ -20,19 +20,31 @@ if __name__ == '__main__':
     cookies = os.environ.get("COOKIES", []).split("&")
     if cookies[0] != "":
 
-        check_in_url = "https://glados.space/api/user/checkin"        # 签到地址
-        status_url = "https://glados.space/api/user/status"          # 查看账户状态
+        check_in_url = "https://glados.cloud/api/user/checkin"        # 签到地址
+        status_url = "https://glados.cloud/api/user/status"          # 查看账户状态
 
-        referer = 'https://glados.space/console/checkin'
-        origin = "https://glados.space"
-        useragent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36"
+        referer = 'https://glados.cloud/console/checkin'
+        origin = "https://glados.cloud"
+        useragent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
         payload = {
-            'token': 'glados.one'
+            'token': 'glados.cloud'
         }
         
         for cookie in cookies:
-            checkin = requests.post(check_in_url, headers={'cookie': cookie, 'referer': referer, 'origin': origin,
-                                    'user-agent': useragent, 'content-type': 'application/json;charset=UTF-8'}, data=json.dumps(payload))
+            headers = {
+                'cookie': cookie,
+                'referer': referer,
+                'origin': origin,
+                'user-agent': useragent,
+                'content-type': 'application/json;charset=UTF-8',
+                'sec-ch-ua': '"Google Chrome";v="143", "Not(A:Brand";v="8", "Chromium";v="143"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"macOS"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-origin'
+            }
+            checkin = requests.post(check_in_url, headers=headers, data=json.dumps(payload))
             state = requests.get(status_url, headers={
                                 'cookie': cookie, 'referer': referer, 'origin': origin, 'user-agent': useragent})
 
