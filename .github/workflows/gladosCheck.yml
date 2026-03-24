@@ -20,7 +20,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
       matrix:
-        python-version: [3.8]
+        python-version: ['3.12']
 
     steps:
     - uses: actions/checkout@v4
@@ -42,9 +42,9 @@ jobs:
       run: |
         python checkin.py
       env:
-        # env获取
         SENDKEY: ${{ secrets.SENDKEY }}
         COOKIES: ${{ secrets.COOKIES }}
+        EXCHANGE_PLAN: ${{ secrets.EXCHANGE_PLAN }}
 
     - name: keep alive
       uses: liskin/gh-workflow-keepalive@v1 # using the workflow with default settings
