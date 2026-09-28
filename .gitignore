@@ -11,10 +11,12 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Environment variables
+# Environment variables & local credentials
 .env
 .env.local
 .env.*.local
+environment_variable.md
+run.sh
 
 # Logs
 logs

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 任务的唯一标识符 -->
+    <key>Label</key>
+    <string>com.chriszhao.gladoscheckin</string>
+
+    <!-- 运行的脚本路径 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/chriszhao/Projects/Gladoscheckin/run.sh</string>
+    </array>
+
+    <!-- 设置工作目录，确保脚本内的相对路径 (.venv, checkin.py) 能正确找到 -->
+    <key>WorkingDirectory</key>
+    <string>/Users/chriszhao/Projects/Gladoscheckin</string>
+
+    <!-- 执行时间：每日 22:00 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- 日志输出路径 (可选，方便排错) -->
+    <key>StandardOutPath</key>
+    <string>/tmp/glados_checkin.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/glados_checkin.err</string>
+</dict>
+</plist>
