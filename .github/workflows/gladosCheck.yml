@@ -54,6 +54,7 @@ jobs:
         GLADOS_USER_AGENT: ${{ secrets.GLADOS_USER_AGENT || vars.GLADOS_USER_AGENT }}
         # 签到域名 (可选): secret 或 repository variable, 未设置时签到 glados.cloud 与 railgun.info
         GLADOS_DOMAINS: ${{ secrets.GLADOS_DOMAINS || vars.GLADOS_DOMAINS }}
+        GLADOS_ALLOW_CUSTOM_DOMAINS: ${{ secrets.GLADOS_ALLOW_CUSTOM_DOMAINS || vars.GLADOS_ALLOW_CUSTOM_DOMAINS }}
 
     # 签到失败 (或之前的步骤失败) 时通过 Poke 告警, 需要 POKE_API_KEY secret
     - name: Alert via Poke

@@ -51,8 +51,13 @@ class ConfigDomainsTest(unittest.TestCase):
         self.assertEqual(make_config(GLADOS_DOMAINS="bad_domain").domains, ["glados.cloud", "railgun.info"])
 
     def test_site_cookie_keys_follow_configured_domains(self):
-        config = make_config(GLADOS_DOMAINS="railgun.info,glados.one")
+        config = make_config(GLADOS_DOMAINS="railgun.info,glados.one", GLADOS_ALLOW_CUSTOM_DOMAINS="true")
+        self.assertEqual(config.domains, ["railgun.info", "glados.one"])
         self.assertEqual(list(config.site_cookie_keys), ["railgun.info"])
+
+    def test_unknown_domains_dropped_without_opt_in(self):
+        self.assertEqual(make_config(GLADOS_DOMAINS="railgun.info,evil.example").domains, ["railgun.info"])
+        self.assertEqual(make_config(GLADOS_DOMAINS="evil.example").domains, ["glados.cloud", "railgun.info"])
 
 
 class CheckerFlowTest(unittest.TestCase):
