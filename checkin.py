@@ -220,6 +220,7 @@ class Config:
     ENV_VERBOSE = "GLADOS_VERBOSE"
     ENV_USER_AGENT = "GLADOS_USER_AGENT"
     ENV_DOMAINS = "GLADOS_DOMAINS"
+    ENV_ALLOW_CUSTOM_DOMAINS = "GLADOS_ALLOW_CUSTOM_DOMAINS"
 
     """默认 User-Agent。
 
@@ -263,8 +264,10 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
         verbose_env: Optional[str] = os.environ.get(self.ENV_VERBOSE)
         user_agent_env: Optional[str] = os.environ.get(self.ENV_USER_AGENT)
         domains_env: Optional[str] = os.environ.get(self.ENV_DOMAINS)
+        allow_custom_env: str = os.environ.get(self.ENV_ALLOW_CUSTOM_DOMAINS, "")
+        allow_custom = allow_custom_env.strip().lower() in ("true", "1", "yes", "y")
 
-        self._load_domains(domains_env)
+        self._load_domains(domains_env, allow_custom)
 
         if not push_key_env:
             logger.warning(f"{LogEmoji.WARNING} 环境变量 '{self.ENV_PUSH_KEY}' 未设置。")
@@ -316,7 +319,7 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
                 "若签到被判定为自动签到 (code 4), 请把它设为你浏览器的 navigator.userAgent。"
             )
 
-    def _load_domains(self, domains_env: Optional[str]) -> None:
+    def _load_domains(self, domains_env: Optional[str], allow_custom: bool = False) -> None:
         """解析 GLADOS_DOMAINS; 未设置或全部无效时回退到默认域名。"""
         if not domains_env or not domains_env.strip():
             self.domains = list(self.DEFAULT_DOMAINS)
@@ -326,6 +329,16 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
             return
 
         domains, invalid = parse_domains(domains_env)
+        unknown = [domain for domain in domains if domain not in SITE_COOKIE_KEYS]
+        if unknown and not allow_custom:
+            # Cookie 会随请求发给这些域名, 未显式允许时不发往内置列表之外的主机
+            logger.warning(
+                f"{LogEmoji.WARNING} {', '.join(unknown)} 不在内置站点列表 "
+                f"({', '.join(SITE_COOKIE_KEYS)}) 中, 为避免把 Cookie 发给非 GLaDOS 主机已忽略。"
+                f"确认是可信的 GLaDOS 镜像时, 设置 {self.ENV_ALLOW_CUSTOM_DOMAINS}=true。"
+            )
+            domains = [domain for domain in domains if domain in SITE_COOKIE_KEYS]
+            unknown = []
         if invalid:
             logger.warning(
                 f"{LogEmoji.WARNING} 环境变量 '{self.ENV_DOMAINS}' 中的 {', '.join(repr(i) for i in invalid)} "
@@ -340,7 +353,6 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
             return
 
         self.domains = domains
-        unknown = [domain for domain in domains if domain not in SITE_COOKIE_KEYS]
         logger.info(f"{LogEmoji.DOMAIN} 使用 {self.ENV_DOMAINS} 指定的域名: {', '.join(domains)}。")
         if unknown:
             logger.info(

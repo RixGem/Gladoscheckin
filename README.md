@@ -45,7 +45,7 @@
 | `railgun.info` | 只签到 railgun.info（Cookie 需含 `koa:sess`/`koa:sess.sig`） |
 | `glados.cloud,railgun.info` | 两个都签到 |
 
-> 可直接粘贴网址（如 `https://glados.cloud/console/checkin`），脚本会自动提取域名；也可填写其他 GLaDOS 镜像域名（使用相同 API 路径，不做 Cookie 字段校验）。
+> 可直接粘贴网址（如 `https://glados.cloud/console/checkin`），脚本会自动提取域名；内置列表之外的域名默认会被忽略（防止 Cookie 被发往非 GLaDOS 主机）；确认是可信的 GLaDOS 镜像时，再添加 `GLADOS_ALLOW_CUSTOM_DOMAINS=true`（secret 或 variable）启用（使用相同 API 路径，不做 Cookie 字段校验）。
 > 只在一个站点有账号时建议只填该站点，避免对另一个站点发出注定失败的请求。
 
 6. User-Agent（非必须）
