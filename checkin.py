@@ -1,12 +1,16 @@
+import functools
 import requests
 import json
 import os
+import re
 import sys
 import logging
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
 from pypushdeer import PushDeer
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from logging_config import init_logger
 
 
@@ -136,9 +140,43 @@ def is_automation_blocked(code: int, message: str) -> bool:
     )
 
 
+"""GLADOS_DOMAINS 的分隔符: 逗号 / 分号 / & / 空白, 中英文逗号均可。"""
+DOMAIN_SEPARATORS = re.compile(r"[,，;；&\s]+")
+HOSTNAME_PATTERN = re.compile(
+    r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$"
+)
+
+
+def normalize_domain(value: str) -> str:
+    """把用户填写的域名规范成纯主机名: 去掉协议、路径、端口、首尾空白, 并转小写。
+
+    例如 `https://GLaDOS.cloud/console/checkin` -> `glados.cloud`。"""
+    domain = value.strip().lower()
+    domain = re.sub(r"^[a-z][a-z0-9+.-]*://", "", domain)
+    domain = domain.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    domain = domain.rsplit("@", 1)[-1].split(":", 1)[0]
+    return domain.strip(".")
+
+
+def parse_domains(raw: str) -> Tuple[List[str], List[str]]:
+    """解析 GLADOS_DOMAINS, 返回 (有效域名列表, 无效输入列表)。保持顺序并去重。"""
+    domains: List[str] = []
+    invalid: List[str] = []
+    for item in DOMAIN_SEPARATORS.split(raw or ""):
+        if not item:
+            continue
+        domain = normalize_domain(item)
+        if not HOSTNAME_PATTERN.match(domain):
+            invalid.append(item)
+        elif domain not in domains:
+            domains.append(domain)
+    return domains, invalid
+
+
 def log_method(func):
     """日志装饰器"""
 
+    @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
         method_name = func.__name__
         emoji_map = {
@@ -181,6 +219,7 @@ class Config:
     ENV_EXCHANGE_PLAN = "GLADOS_EXCHANGE_PLAN"
     ENV_VERBOSE = "GLADOS_VERBOSE"
     ENV_USER_AGENT = "GLADOS_USER_AGENT"
+    ENV_DOMAINS = "GLADOS_DOMAINS"
 
     """默认 User-Agent。
 
@@ -197,8 +236,8 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
     """默认是否输出详细响应"""
     DEFAULT_VERBOSE = False
 
-    """默认域名"""
-    DOMAINS = ["glados.cloud", "railgun.info"]
+    """默认签到域名, 可用 GLADOS_DOMAINS 覆盖 (例如只填 glados.cloud)"""
+    DEFAULT_DOMAINS: Tuple[str, ...] = tuple(SITE_COOKIE_KEYS)
 
     """兑换计划列表"""
     EXCHANGE_PLANS = {
@@ -213,6 +252,7 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
         self.exchange_plan: str = self.DEFAULT_EXCHANGE_PLAN
         self.verbose: bool = self.DEFAULT_VERBOSE
         self.user_agent: str = self.DEFAULT_USER_AGENT
+        self.domains: List[str] = list(self.DEFAULT_DOMAINS)
         self._load_config()
 
     def _load_config(self) -> None:
@@ -222,6 +262,9 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
         exchange_plan_env: Optional[str] = os.environ.get(self.ENV_EXCHANGE_PLAN)
         verbose_env: Optional[str] = os.environ.get(self.ENV_VERBOSE)
         user_agent_env: Optional[str] = os.environ.get(self.ENV_USER_AGENT)
+        domains_env: Optional[str] = os.environ.get(self.ENV_DOMAINS)
+
+        self._load_domains(domains_env)
 
         if not push_key_env:
             logger.warning(f"{LogEmoji.WARNING} 环境变量 '{self.ENV_PUSH_KEY}' 未设置。")
@@ -273,6 +316,43 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
                 "若签到被判定为自动签到 (code 4), 请把它设为你浏览器的 navigator.userAgent。"
             )
 
+    def _load_domains(self, domains_env: Optional[str]) -> None:
+        """解析 GLADOS_DOMAINS; 未设置或全部无效时回退到默认域名。"""
+        if not domains_env or not domains_env.strip():
+            self.domains = list(self.DEFAULT_DOMAINS)
+            logger.info(
+                f"{LogEmoji.INFO} 未设置 {self.ENV_DOMAINS}, 使用默认域名: {', '.join(self.domains)}。"
+            )
+            return
+
+        domains, invalid = parse_domains(domains_env)
+        if invalid:
+            logger.warning(
+                f"{LogEmoji.WARNING} 环境变量 '{self.ENV_DOMAINS}' 中的 {', '.join(repr(i) for i in invalid)} "
+                "不是有效域名, 已忽略。"
+            )
+        if not domains:
+            self.domains = list(self.DEFAULT_DOMAINS)
+            logger.warning(
+                f"{LogEmoji.WARNING} 环境变量 '{self.ENV_DOMAINS}' 未包含有效域名, "
+                f"将使用默认域名: {', '.join(self.domains)}。"
+            )
+            return
+
+        self.domains = domains
+        unknown = [domain for domain in domains if domain not in SITE_COOKIE_KEYS]
+        logger.info(f"{LogEmoji.DOMAIN} 使用 {self.ENV_DOMAINS} 指定的域名: {', '.join(domains)}。")
+        if unknown:
+            logger.info(
+                f"{LogEmoji.INFO} {', '.join(unknown)} 不在内置站点列表中, "
+                "将按相同的 API 路径签到, 并跳过 Cookie 字段校验。"
+            )
+
+    @property
+    def site_cookie_keys(self) -> Dict[str, Tuple[str, ...]]:
+        """当前签到域名中, 已知会话 Cookie 字段的那部分站点。"""
+        return {domain: SITE_COOKIE_KEYS[domain] for domain in self.domains if domain in SITE_COOKIE_KEYS}
+
     def _validate_cookies(self) -> None:
         """校验 Cookie 结构, 只输出字段名与数量, 不输出凭据本身。
 
@@ -280,8 +360,13 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
         「两对都必须有」: 只在 glados.cloud 或只在 railgun.info 注册的用户,
         本来就只能拿到其中一对。
         """
+        site_keys = self.site_cookie_keys
+        if len(site_keys) < len(self.domains):
+            # 有未知站点时无法判断 Cookie 是否齐全, 不做校验以免误报
+            return
+
         for idx, cookie in enumerate(self.cookies_list, 1):
-            sites = complete_cookie_sites(cookie)
+            sites = [domain for domain in complete_cookie_sites(cookie) if domain in site_keys]
             if sites:
                 site_desc = "、".join(
                     f"{domain} ({'/'.join(SITE_COOKIE_KEYS[domain])})" for domain in sites
@@ -294,7 +379,7 @@ GLaDOS 的反自动化校验会比对「签到请求的平台」与「登录时�
 
             present = parse_cookie_keys(cookie)
             missing_desc = "；".join(
-                f"{domain} 需要 {'/'.join(keys)}" for domain, keys in SITE_COOKIE_KEYS.items()
+                f"{domain} 需要 {'/'.join(keys)}" for domain, keys in site_keys.items()
             )
             logger.warning(
                 f"{LogEmoji.WARNING} Cookie[{idx}] 没有一对完整的会话字段 "
@@ -316,6 +401,21 @@ class API:
     """POST 的 content-type, 与站点前端 axios 发出的一致 (带 charset, 无空格)。"""
     CONTENT_TYPE_JSON = "application/json;charset=UTF-8"
 
+    """(连接超时, 读取超时) 秒"""
+    TIMEOUT = (15, 60)
+
+    """重试策略: 连接失败对所有请求重试 (请求尚未发出, 不会重复签到/兑换);
+    429/5xx 只对 GET 这类幂等请求重试, POST (签到、兑换) 不因状态码重放。"""
+    RETRY = Retry(
+        total=3,
+        connect=3,
+        read=0,
+        status=2,
+        backoff_factor=1,
+        status_forcelist=(429, 500, 502, 503, 504),
+        raise_on_status=False,
+    )
+
     def __init__(
         self,
         domain: str,
@@ -332,6 +432,9 @@ class API:
         self._automation_error_reported: bool = False
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        adapter = HTTPAdapter(max_retries=self.RETRY)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def __del__(self):
         """关闭 session"""
@@ -362,7 +465,7 @@ class API:
         accept(默认值)与 content-type(POST)。其余由浏览器生成。
 
         2026-09-26 用 CDP 抓了本机 Chrome 154 (macOS) 在 /console/checkin 点「签到」
-        的真实请求 (见 tests/fixtures/browser_checkin_request.json), 结论:
+        的真实请求, 结论:
         - accept 就是 `application/json, text/plain, */*`;
         - 页面 /console 带 `<meta name="referrer" content="no-referrer">`,
           所以浏览器**没有**发 Referer —— 这里也就不能自己造一个;
@@ -391,6 +494,24 @@ class API:
     def _get_full_url(self, path: str) -> str:
         """获取完整 URL"""
         return f"https://{self.domain}{path}"
+
+    @property
+    def auth_failed(self) -> bool:
+        """本会话内是否已有接口返回认证失败 (Cookie 对该域名无效)。"""
+        return self._auth_error_reported
+
+    def _parse_json(self, response: requests.Response, endpoint: str) -> Optional[Dict]:
+        """解析 JSON 响应; 返回非 JSON (例如 Cloudflare 拦截页) 时给出可读提示。"""
+        try:
+            data = response.json()
+        except ValueError:
+            snippet = response.text[:200].replace("\n", " ")
+            self._log("warning", LogEmoji.WARNING, f"{endpoint} 返回的不是 JSON: {snippet}", force=True)
+            return None
+        if not isinstance(data, dict):
+            self._log("warning", LogEmoji.WARNING, f"{endpoint} 返回了意外的 JSON: {data!r}"[:300], force=True)
+            return None
+        return data
 
     def _report_auth_error(self, endpoint: str, message: str) -> None:
         """认证失败时输出一次可操作的提示, 避免每个接口重复刷屏。"""
@@ -461,10 +582,10 @@ class API:
                     url,
                     headers=session_headers,
                     data=self._serialize_post_body(data),
-                    timeout=(60, 120),
+                    timeout=self.TIMEOUT,
                 )
             elif method.upper() == "GET":
-                response = self.session.get(url, headers=session_headers, timeout=(60, 120))
+                response = self.session.get(url, headers=session_headers, timeout=self.TIMEOUT)
             else:
                 self._log("error", LogEmoji.ERROR, f"不支持的 HTTP 方法: {method}", force=True)
                 return None
@@ -495,8 +616,8 @@ class API:
             "code": CheckinStatus.FAILURE,
         }
 
-        if response:
-            data = response.json()
+        data = self._parse_json(response, "checkin") if response is not None else None
+        if data is not None:
             code = data.get("code", -2)
             message = data.get("message", "无消息字段")
             points = str(data.get("points", 0))
@@ -527,7 +648,7 @@ class API:
             self._log("warning", LogEmoji.WARNING, "签到失败", force=True)
             result["code"] = CheckinStatus.FAILURE
             result["status"] = "签到失败"
-            result["message"] = "网络请求失败"
+            result["message"] = "网络请求失败或响应无效"
 
         return result
 
@@ -538,11 +659,11 @@ class API:
         url = self._get_full_url(self.STATUS_URL)
         response = self._make_request(url, "GET", cookies=cookies)
 
-        if response:
-            data = response.json()
+        data = self._parse_json(response, "status") if response is not None else None
+        if data is not None:
             code = data.get("code", -2)
             message = data.get("message", "")
-            left_days = data.get("data", {}).get("leftDays", None)
+            left_days = (data.get("data") or {}).get("leftDays", None)
 
             if left_days is not None:
                 left_days_int = int(float(left_days))
@@ -563,8 +684,8 @@ class API:
         url = self._get_full_url(self.POINTS_URL)
         response = self._make_request(url, "GET", cookies=cookies)
 
-        if response:
-            data = response.json()
+        data = self._parse_json(response, "points") if response is not None else None
+        if data is not None:
             code = data.get("code", -2)
             message = data.get("message", "")
             points = data.get("points", None)
@@ -586,12 +707,12 @@ class API:
 
     @log_method
     def exchange(self, cookies: str, plan: str, required_points: int) -> str:
-        """执行兑换"""
+        """执行兑换 (积分是否足够由调用方判断)"""
         url = self._get_full_url(self.EXCHANGE_URL)
         response = self._make_request(url, "POST", {"planType": plan}, cookies)
 
-        if response:
-            data = response.json()
+        data = self._parse_json(response, "exchange") if response is not None else None
+        if data is not None:
             code = data.get("code", -2)
             message = data.get("message", "未知错误")
 
@@ -669,7 +790,7 @@ class Checker:
     def checkin_all(self):
         """执行所有签到任务"""
         cookie_count = len(self.config.cookies_list)
-        domain_count = len(self.config.DOMAINS)
+        domain_count = len(self.config.domains)
         total_tasks = cookie_count * domain_count
         task_idx = 0
 
@@ -678,7 +799,7 @@ class Checker:
         for cookie_idx, cookie in enumerate(self.config.cookies_list, 1):
             logger.info(f"{LogEmoji.START} ========== 开始处理 Cookie {cookie_idx} ==========")
 
-            for domain in self.config.DOMAINS:
+            for domain in self.config.domains:
                 task_idx += 1
                 logger.info(f"{LogEmoji.INFO} ----- 任务 {task_idx}/{total_tasks}: {LogEmoji.COOKIE}[{cookie_idx}] on {LogEmoji.DOMAIN}[{domain}] -----")
 
@@ -708,13 +829,25 @@ class Checker:
             result.status = checkin_result["status"]
             result.code = checkin_result.get("code", CheckinStatus.FAILURE)
 
+            result.points = str(checkin_result.get("points", "0"))
+
+            # Cookie 对该域名无效时, 后续接口必然同样失败, 直接跳过
+            if api.auth_failed:
+                result.exchange = "跳过兑换: 认证失败"
+                return result
+
             # 3. 获取积分
             self._log(cookie_idx, domain, LogEmoji.POINTS, "查询总积分")
             points_str, points_num = api.get_points(cookie)
             result.points_total = points_str
 
-            # 4. 执行兑换
+            # 4. 积分达到计划要求时才执行兑换
             required_points = self.config.EXCHANGE_PLANS.get(self.config.exchange_plan, 500)
+            if points_num < required_points:
+                result.exchange = f"积分不足, 未兑换 ({points_num}/{required_points})"
+                self._log(cookie_idx, domain, LogEmoji.EXCHANGE, result.exchange)
+                return result
+
             self._log(
                 cookie_idx,
                 domain,
@@ -732,7 +865,7 @@ class Checker:
     def failed_cookie_indexes(self) -> List[int]:
         """返回在所有域名上都未签到成功/重复的 Cookie 序号。
 
-        同一个 Cookie 会被依次发往 glados.cloud 与 railgun.info, 通常只有其中一个
+        同一个 Cookie 会被依次发往每个签到域名 (默认 glados.cloud 与 railgun.info), 通常只有其中一个
         站点持有该账号, 另一个必然返回 code -2。因此以「该 Cookie 是否至少在一个
         域名上成功」作为账号维度的成功判据, 避免把正常现象当成失败。
         """
@@ -806,12 +939,16 @@ def main() -> int:
             failed_indexes = checker.failed_cookie_indexes()
             if failed_indexes:
                 exit_code = EXIT_CHECKIN_FAILED
+                key_hint = ", ".join(
+                    f"{domain} 需要 {'/'.join(keys)}" for domain, keys in config.site_cookie_keys.items()
+                )
                 logger.error(
                     f"{LogEmoji.ERROR} Cookie "
                     f"{', '.join(f'[{idx}]' for idx in failed_indexes)} "
-                    "在所有域名上都未签到成功, 请检查 Cookie 是否完整/过期 "
-                    "(glados.cloud 需要 gld:sess/gld:sess.sig, railgun.info 需要 "
-                    "koa:sess/koa:sess.sig), "
+                    f"在所有域名 ({', '.join(config.domains)}) 上都未签到成功, "
+                    "请检查 Cookie 是否完整/过期"
+                    f"{f' ({key_hint})' if key_hint else ''}, "
+                    f"{Config.ENV_DOMAINS} 是否包含账号所在站点, "
                     "或签到被判定为自动签到 (code 4, 需把 GLADOS_USER_AGENT 设为浏览器 "
                     "navigator.userAgent)。"
                 )

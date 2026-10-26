@@ -51,10 +51,28 @@ jobs:
         GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES || secrets.COOKIES }}
         GLADOS_EXCHANGE_PLAN: ${{ secrets.GLADOS_EXCHANGE_PLAN || secrets.EXCHANGE_PLAN }}
         GLADOS_VERBOSE: ${{ secrets.GLADOS_VERBOSE }}
+        GLADOS_USER_AGENT: ${{ secrets.GLADOS_USER_AGENT || vars.GLADOS_USER_AGENT }}
+        # 签到域名 (可选): secret 或 repository variable, 未设置时签到 glados.cloud 与 railgun.info
+        GLADOS_DOMAINS: ${{ secrets.GLADOS_DOMAINS || vars.GLADOS_DOMAINS }}
+
+    # 签到失败 (或之前的步骤失败) 时通过 Poke 告警, 需要 POKE_API_KEY secret
+    - name: Alert via Poke
+      if: failure()
+      env:
+        POKE_API_KEY: ${{ secrets.POKE_API_KEY }}
+      run: |
+        if [ -z "$POKE_API_KEY" ]; then
+          echo "::error::POKE_API_KEY secret is not set; cannot send the Poke failure alert."
+          exit 1
+        fi
+        curl --fail-with-body -sS 'https://poke.com/api/v1/inbound/api-message' \
+          -H "Authorization: Bearer $POKE_API_KEY" \
+          -H "Content-Type: application/json" \
+          -d "{\"message\": \"Check-in failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
 
     - name: Keep alive
-      uses: liskin/gh-workflow-keepalive@v1 
-        
+      uses: liskin/gh-workflow-keepalive@v1
+
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
       with:

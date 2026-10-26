@@ -16,7 +16,7 @@
   > 参考格式：koa:sess=eyJ1c2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxAwMH0=; koa:sess.sig=xJkOxxxxxxxxxxxxxxxtnM;
 
 
-- 多账号请在 `COOKIES` 中 添加多个 `cookies` 中间使用 `&`连接即可。（例如： `c1&c3&c3...`）
+- 多账号请在 `GLADOS_COOKIES` 中 添加多个 `cookies` 中间使用 `&`连接即可。（例如： `c1&c3&c3...`）
 
 3. 配置积分兑换策略（非必须）
 
@@ -34,6 +34,30 @@
 
 - 添加1个`repository secret`，命名为`PUSHDEER_SENDKEY`，其值对应 PushDeer key: ([获取地址](https://www.pushdeer.com/product.html))。
 
+5. 签到域名（非必须）
+
+- 添加1个`repository secret`（或 `Variables` 下的 `repository variable`），命名为`GLADOS_DOMAINS`，指定要签到的站点域名，多个域名用英文逗号分隔：
+
+| 示例值 | 效果 |
+|---|---|
+| 不配置 | 依次签到 `glados.cloud` 与 `railgun.info`（默认） |
+| `glados.cloud` | 只签到 glados.cloud（Cookie 需含 `gld:sess`/`gld:sess.sig`） |
+| `railgun.info` | 只签到 railgun.info（Cookie 需含 `koa:sess`/`koa:sess.sig`） |
+| `glados.cloud,railgun.info` | 两个都签到 |
+
+> 可直接粘贴网址（如 `https://glados.cloud/console/checkin`），脚本会自动提取域名；也可填写其他 GLaDOS 镜像域名（使用相同 API 路径，不做 Cookie 字段校验）。
+> 只在一个站点有账号时建议只填该站点，避免对另一个站点发出注定失败的请求。
+
+6. User-Agent（非必须）
+
+- 签到返回 code 4「Automated check-in detected」时，添加`GLADOS_USER_AGENT`（secret 或 variable），值为**登录时所用浏览器**控制台中 `navigator.userAgent` 的输出。
+
+7. 失败告警 Poke（推荐）
+
+- 添加1个`repository secret`，命名为`POKE_API_KEY`，值为 Poke API Key。
+- 签到失败（脚本退出码非 0，即任一账号在所有域名上都未签到成功、未配置 Cookie 或脚本异常）时，工作流的 `Alert via Poke` 步骤会发送一条包含本次运行链接的消息。
+- 未配置 `POKE_API_KEY` 时该步骤会报错提示缺少 secret（签到本身已失败，不影响其他逻辑）。
+
 ### **star**自己的仓库
 
 
@@ -41,6 +65,10 @@
 
 ```shell
 │  checkin.py	# 签到脚本
+│  logging_config.py	# 日志配置
+│
+├─tests
+│      test_checkin.py	# 单元测试 (python -m unittest discover -s tests)
 │
 ├─.github
 │  └─workflows
