@@ -44,8 +44,13 @@ jobs:
 
     # 执行 签到脚本
     - name: Running checkin
+      id: checkin
       run: |
-        python checkin.py
+        set +e
+        python checkin.py 2>&1 | tee "$RUNNER_TEMP/checkin.log"
+        checkin_status=${PIPESTATUS[0]}
+        echo "exit_code=$checkin_status" >> "$GITHUB_OUTPUT"
+        exit "$checkin_status"
       env:
         PUSHDEER_SENDKEY: ${{ secrets.PUSHDEER_SENDKEY || secrets.SENDKEY }}
         GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES || secrets.COOKIES }}
@@ -61,15 +66,25 @@ jobs:
       if: failure()
       env:
         POKE_API_KEY: ${{ secrets.POKE_API_KEY }}
+        CHECKIN_EXIT_CODE: ${{ steps.checkin.outputs.exit_code }}
+        CHECKIN_LOG: ${{ steps.checkin.outcome == 'failure' && format('Check-in log follows; exit code {0}:\n', steps.checkin.outputs.exit_code) || 'Check-in step did not run or did not fail.\n' }}
       run: |
         if [ -z "$POKE_API_KEY" ]; then
           echo "::error::POKE_API_KEY secret is not set; cannot send the Poke failure alert."
           exit 1
         fi
+        log_file="$RUNNER_TEMP/checkin.log"
+        if [ -f "$log_file" ]; then
+          CHECKIN_LOG="$(cat "$log_file")"
+        else
+          CHECKIN_LOG="Check-in log file was not produced. The check-in step may not have run."
+        fi
+        message="Check-in failed (exit code ${CHECKIN_EXIT_CODE:-unknown}). Full check-in log:\n${CHECKIN_LOG}\n\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        payload=$(jq -n --arg message "$message" '{message: $message}')
         curl --fail-with-body -sS 'https://poke.com/api/v1/inbound/api-message' \
           -H "Authorization: Bearer $POKE_API_KEY" \
           -H "Content-Type: application/json" \
-          -d "{\"message\": \"Check-in failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+          --data-raw "$payload"
 
     - name: Keep alive
       uses: liskin/gh-workflow-keepalive@v1
