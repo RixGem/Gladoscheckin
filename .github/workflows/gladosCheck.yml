@@ -44,8 +44,13 @@ jobs:
 
     # 执行 签到脚本
     - name: Running checkin
+      id: checkin
       run: |
-        python checkin.py
+        set +e
+        python checkin.py 2>&1 | tee "$RUNNER_TEMP/checkin.log"
+        checkin_status=${PIPESTATUS[0]}
+        echo "exit_code=$checkin_status" >> "$GITHUB_OUTPUT"
+        exit "$checkin_status"
       env:
         PUSHDEER_SENDKEY: ${{ secrets.PUSHDEER_SENDKEY || secrets.SENDKEY }}
         GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES || secrets.COOKIES }}
@@ -61,15 +66,43 @@ jobs:
       if: failure()
       env:
         POKE_API_KEY: ${{ secrets.POKE_API_KEY }}
+        CHECKIN_EXIT_CODE: ${{ steps.checkin.outputs.exit_code }}
       run: |
         if [ -z "$POKE_API_KEY" ]; then
           echo "::error::POKE_API_KEY secret is not set; cannot send the Poke failure alert."
           exit 1
         fi
+        log_file="$RUNNER_TEMP/checkin.log"
+        safe_log_file="$RUNNER_TEMP/checkin-alert.log"
+        if [ -f "$log_file" ]; then
+          # Preserve diagnostic wording; mask cookie/session values rather than dropping lines.
+          python - "$log_file" "$safe_log_file" <<'PY'
+        import re
+        import sys
+        from pathlib import Path
+
+        source, destination = map(Path, sys.argv[1:])
+        text = source.read_text(errors="replace")
+        patterns = (
+            r'(?i)(gld:sess(?:\.sig)?|koa:sess(?:\.sig)?)=([^;\\s]+)',
+            r'(?i)(cookie\\s*[:=]\\s*)([^\\r\\n]+)',
+            r'(?i)((?:authorization|token|secret|password)\\s*[:=]\\s*)([^\\s,;]+)',
+        )
+        for pattern in patterns:
+            text = re.sub(pattern, lambda m: m.group(1) + "***", text)
+        destination.write_text(text[:6000])
+        PY
+        else
+          printf '%s' 'Check-in log file was not produced. The check-in step may not have run.' > "$safe_log_file"
+        fi
+        jq -n --arg exit_code "${CHECKIN_EXIT_CODE:-unknown}" \
+          --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          --rawfile log "$safe_log_file" \
+          '{message: ("Check-in failed (exit code " + $exit_code + "). Check-in diagnostics (credential values masked; truncated to 6000 bytes):\n" + $log + "\nRun: " + $run_url)}' > "$RUNNER_TEMP/poke-payload.json"
         curl --fail-with-body -sS 'https://poke.com/api/v1/inbound/api-message' \
           -H "Authorization: Bearer $POKE_API_KEY" \
           -H "Content-Type: application/json" \
-          -d "{\"message\": \"Check-in failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+          --data-binary "@$RUNNER_TEMP/poke-payload.json"
 
     - name: Keep alive
       uses: liskin/gh-workflow-keepalive@v1
